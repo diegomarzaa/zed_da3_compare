@@ -129,6 +129,34 @@ Funcional.
 Sirve tanto para anotacion online como para revisar/editar samples despues.
 No tiene que ser bonito; tiene que ser practico y permitir capturar datos sin lanzar mil programas.
 
+Actualizacion sincronizacion ZED:
+
+La GUI usa ahora por defecto `/zed/zed_node/rgb/color/rect/image` para la imagen principal, no `/zed/zed_node/left/color/rect/image`.
+
+Motivo:
+
+Stereolabs documenta que `rgb` y `left` son identicos en camaras stereo, pero `rgb` es el canal pensado para asociarse al depth sincronizado.
+
+Depth:
+
+`/zed/zed_node/depth/depth_registered`
+
+Right:
+
+`/zed/zed_node/right/color/rect/image`
+
+La derecha sigue siendo util para DA3 multiview, pero no bloquea la captura principal RGB-depth.
+
+Cada sample guarda en `metadata.json` un bloque `verification` con:
+
+topics usados
+stamps
+deltas RGB-depth/right
+encodings
+formas RGB/depth
+si RGB y depth tienen el mismo tamano
+estadisticas basicas del depth ZED
+
 ### Herramienta: analisis de escena
 
 Archivo: `zed_da3_compare/analyze_gt_scene.py`.
@@ -162,7 +190,25 @@ Estado:
 
 Funcional.
 Ya se uso con `captures/scene_00_tests`.
-Pendiente ampliarlo mas hacia analisis sin GT, usando ZED como referencia.
+Ya genera analisis sin GT usando ZED como referencia.
+
+Nuevos outputs DA3-ZED:
+
+`analysis/zed_reference_roi_metrics.csv`
+`analysis/zed_reference_sample_metrics.csv`
+`analysis/plots/zed_ref_roi_scatter.png`
+`analysis/plots/zed_ref_roi_signed_diff.png`
+`analysis/plots/zed_ref_roi_abs_diff_boxplot.png`
+`analysis/plots/zed_ref_sample_mae_vs_validity.png`
+`analysis/plots/zed_ref_sample_scale.png`
+
+Lectura:
+
+`raw_*`: DA3 contra ZED sin corregir escala.
+`scaled_*`: DA3 contra ZED despues de ajustar escala global.
+`diff_m`: DA3 - ZED en una ROI.
+`ratio_method_over_zed`: si DA3 da mas o menos distancia que ZED.
+`zed_valid_ratio`: cuidado si la ZED tiene pocos pixeles validos en esa ROI.
 
 ### Herramienta: visor interactivo de depth
 
@@ -198,6 +244,33 @@ Estado:
 Funcional.
 Muy util para comparar ZED y DA3 de forma intuitiva.
 Especialmente util ahora que quiero mirar diferencias en escenas generales, no solo tablas.
+
+### Notebook: analisis DA3-ZED paso a paso
+
+Archivo: `notebooks/da3_zed_scene_analysis.ipynb`.
+
+Objetivo:
+
+entender el analisis sin tener que leer todo el script automatico.
+
+Hace:
+
+carga escena
+carga anotaciones
+calcula metricas ROI DA3-ZED
+calcula metricas por sample completo
+dibuja scatter, barras, escala y mapas depth
+permite editar formulas y graficas rapido
+
+Uso:
+
+```bash
+cd /home/usuario/depth_anything_ws/src/zed_da3_compare
+jupyter lab notebooks/da3_zed_scene_analysis.ipynb
+```
+
+El script `analyze_gt_scene.py` queda como flujo automatico.
+El notebook queda como flujo didactico/exploratorio.
 
 ## Resultados iniciales: scene_00_tests
 
@@ -616,7 +689,6 @@ roi_area_px
 
 Para ROIs con ground truth:
 
-
 zed_median_depth_m
 da3_median_depth_m
 zed_abs_error_m
@@ -626,7 +698,6 @@ da3_rel_error
 winner_abs_error
 
 Interpretacion:
-
 
 raw_*: DA3 contra ZED sin tocar escala.
 scaled_*: forma relativa tras reescalar DA3 contra ZED.

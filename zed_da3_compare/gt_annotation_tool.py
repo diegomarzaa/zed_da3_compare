@@ -148,7 +148,7 @@ class GtAnnotationTool(Node):
         super().__init__("gt_annotation_tool")
         self.declare_parameter("captures_root", str(DEFAULT_CAPTURE_ROOT))
         self.declare_parameter("scene_name", "scene_01")
-        self.declare_parameter("left_image_topic", "/zed/zed_node/left/color/rect/image")
+        self.declare_parameter("left_image_topic", "/zed/zed_node/rgb/color/rect/image")
         self.declare_parameter("right_image_topic", "/zed/zed_node/right/color/rect/image")
         self.declare_parameter("zed_depth_topic", "/zed/zed_node/depth/depth_registered")
         self.declare_parameter("sync_tolerance_ms", 30.0)
@@ -212,6 +212,22 @@ class GtAnnotationTool(Node):
                 right = None
             return SyncedLiveTriple(left=left, right=right, depth=depth)
         return None
+
+    def sync_debug_text(self) -> str:
+        tolerance_ms = float(self.get_parameter("sync_tolerance_ms").value)
+        if not self.left_queue:
+            return f"No RGB/left messages yet. queues left=0 right={len(self.right_queue)} depth={len(self.depth_queue)}"
+        latest_left = self.left_queue[-1]
+        depth, depth_delta = nearest_record(latest_left, self.depth_queue)
+        right, right_delta = nearest_record(latest_left, self.right_queue)
+        depth_text = f"{depth_delta:.1f}ms" if depth is not None else "none"
+        right_text = f"{right_delta:.1f}ms" if right is not None else "none"
+        return (
+            f"No synced RGB/depth <= {tolerance_ms:.1f}ms. "
+            f"queues left={len(self.left_queue)} right={len(self.right_queue)} depth={len(self.depth_queue)} "
+            f"nearest depth={depth_text} right={right_text}. "
+            "Try rgb/color/rect/image or increase sync_tolerance_ms."
+        )
 
     def run(self) -> None:
         cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
@@ -371,6 +387,33 @@ class GtAnnotationTool(Node):
             return colorize_depth(self.current_sample["da3_multiview_depth"])
         return cv2.cvtColor(self.current_sample["left_rgb"], cv2.COLOR_RGB2BGR)
 
+    def sample_verification_metadata(
+        self,
+        triple: SyncedLiveTriple,
+        left_rgb: np.ndarray,
+        right_rgb: np.ndarray | None,
+        zed_depth: np.ndarray,
+    ) -> dict[str, Any]:
+        valid = zed_depth[np.isfinite(zed_depth) & (zed_depth > 0.0)]
+        depth_stats = {
+            "valid_ratio": float(valid.size / max(zed_depth.size, 1)),
+            "min_m": float(np.min(valid)) if valid.size else None,
+            "median_m": float(np.median(valid)) if valid.size else None,
+            "mean_m": float(np.mean(valid)) if valid.size else None,
+            "max_m": float(np.max(valid)) if valid.size else None,
+        }
+        return {
+            "left_encoding": triple.left.msg.encoding,
+            "right_encoding": triple.right.msg.encoding if triple.right else None,
+            "depth_encoding": triple.depth.msg.encoding,
+            "left_shape_hw": list(left_rgb.shape[:2]),
+            "right_shape_hw": list(right_rgb.shape[:2]) if right_rgb is not None else None,
+            "depth_shape_hw": list(zed_depth.shape[:2]),
+            "rgb_depth_same_shape": list(left_rgb.shape[:2]) == list(zed_depth.shape[:2]),
+            "right_available": right_rgb is not None,
+            "zed_depth_stats": depth_stats,
+        }
+
     def draw_annotations(self, canvas: np.ndarray, scale: float) -> None:
         if self.current_sample is None:
             return
@@ -405,11 +448,12 @@ class GtAnnotationTool(Node):
     def capture_live_sample(self) -> None:
         triple = self.find_synced_triple()
         if triple is None:
-            self.status = "No synced left/depth sample available yet"
+            self.status = self.sync_debug_text()
             return
         left_rgb = image_msg_to_rgb(triple.left.msg)
         right_rgb = image_msg_to_rgb(triple.right.msg) if triple.right is not None else None
         zed_depth = depth_msg_to_meters(triple.depth.msg)
+        verification = self.sample_verification_metadata(triple, left_rgb, right_rgb, zed_depth)
         self.current_sample = {
             "left_rgb": left_rgb,
             "right_rgb": right_rgb,
@@ -427,6 +471,7 @@ class GtAnnotationTool(Node):
                 "left_topic": str(self.get_parameter("left_image_topic").value),
                 "right_topic": str(self.get_parameter("right_image_topic").value),
                 "zed_depth_topic": str(self.get_parameter("zed_depth_topic").value),
+                "verification": verification,
             },
         }
         self.annotations = []

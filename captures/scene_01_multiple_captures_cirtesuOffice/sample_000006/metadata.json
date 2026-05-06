@@ -1,0 +1,42 @@
+{
+  "scene": "scene_01_multiple_captures_cirtesuOffice",
+  "source": "live",
+  "left_stamp_ns": 1778066165088325826,
+  "right_stamp_ns": 1778066165121686826,
+  "depth_stamp_ns": 1778066165054839826,
+  "left_depth_delta_ms": 33.486,
+  "left_right_delta_ms": 33.361,
+  "left_topic": "/zed/zed_node/rgb/color/rect/image",
+  "right_topic": "/zed/zed_node/right/color/rect/image",
+  "zed_depth_topic": "/zed/zed_node/depth/depth_registered",
+  "verification": {
+    "left_encoding": "bgra8",
+    "right_encoding": "bgra8",
+    "depth_encoding": "32FC1",
+    "left_shape_hw": [
+      360,
+      640
+    ],
+    "right_shape_hw": [
+      360,
+      640
+    ],
+    "depth_shape_hw": [
+      360,
+      640
+    ],
+    "rgb_depth_same_shape": true,
+    "right_available": true,
+    "zed_depth_stats": {
+      "valid_ratio": 0.9395833333333333,
+      "min_m": 0.20401965081691742,
+      "median_m": 2.3229286670684814,
+      "mean_m": 3.0221664905548096,
+      "max_m": 9.3400239944458
+    }
+  },
+  "sample_id": "sample_000006",
+  "has_da3_mono": true,
+  "has_da3_multiview": true,
+  "annotation_count": 0
+}

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import cv2
@@ -14,9 +15,26 @@ import pandas as pd
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from zed_da3_compare.depth_metrics import (
+    joint_valid_mask,
+    median_scale_to_reference,
+    pairwise_depth_metrics,
+    resize_depth_to_shape,
+    supervised_depth_metrics,
+    valid_depth_mask,
+)
+
 
 METHODS = {
     "zed": "zed_depth.npy",
+    "da3_mono": "da3_mono_depth.npy",
+    "da3_multiview": "da3_multiview_depth.npy",
+}
+
+DA3_METHODS = {
     "da3_mono": "da3_mono_depth.npy",
     "da3_multiview": "da3_multiview_depth.npy",
 }
@@ -42,11 +60,15 @@ def main() -> None:
     long, wide = recompute_metrics(scene_dir, annotations)
     existing_long = long[long["sample_exists"] & long["has_depth"] & np.isfinite(long["pred_m"])].copy()
     existing_wide = wide[wide["sample_exists"]].copy()
+    zed_ref_roi = build_zed_reference_roi_metrics(existing_wide)
+    zed_ref_samples = build_zed_reference_sample_metrics(scene_dir)
 
     long.to_csv(analysis_dir / "roi_metrics_long.csv", index=False)
     wide.to_csv(analysis_dir / "roi_metrics_wide.csv", index=False)
     existing_long.to_csv(analysis_dir / "roi_metrics_existing_long.csv", index=False)
     existing_wide.to_csv(analysis_dir / "roi_metrics_existing_wide.csv", index=False)
+    zed_ref_roi.to_csv(analysis_dir / "zed_reference_roi_metrics.csv", index=False)
+    zed_ref_samples.to_csv(analysis_dir / "zed_reference_sample_metrics.csv", index=False)
 
     summary = summarize_by_method(existing_long)
     summary.to_csv(analysis_dir / "summary_by_method.csv", index=False)
@@ -57,9 +79,9 @@ def main() -> None:
         winner_counts = existing_wide["winner_recomputed"].value_counts().rename_axis("method").reset_index(name="wins")
     winner_counts.to_csv(analysis_dir / "winner_counts.csv", index=False)
 
-    write_plots(existing_long, existing_wide, winner_counts, plots_dir)
+    write_plots(existing_long, existing_wide, winner_counts, zed_ref_roi, zed_ref_samples, plots_dir)
     write_visual_overlays(scene_dir, wide, visuals_dir)
-    write_report(scene_dir, analysis_dir, annotations, existing_wide, summary, winner_counts)
+    write_report(scene_dir, analysis_dir, annotations, existing_wide, summary, winner_counts, zed_ref_roi, zed_ref_samples)
 
     print(f"analysis_dir={analysis_dir}")
     if summary.empty:
@@ -200,8 +222,95 @@ def summarize_by_method(existing_long: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def write_plots(existing_long: pd.DataFrame, existing_wide: pd.DataFrame, winner_counts: pd.DataFrame, plots_dir: Path) -> None:
+def build_zed_reference_roi_metrics(existing_wide: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict] = []
+    if existing_wide.empty:
+        return pd.DataFrame()
+
+    for _, row in existing_wide.iterrows():
+        zed = row.get("zed_median_m", np.nan)
+        if not np.isfinite(zed) or zed <= 0:
+            continue
+        for method in DA3_METHODS:
+            pred = row.get(f"{method}_median_m", np.nan)
+            if not np.isfinite(pred) or pred <= 0:
+                continue
+            diff = pred - zed
+            abs_diff = abs(diff)
+            rows.append(
+                {
+                    "scene": row.get("scene", ""),
+                    "sample_id": row.get("sample_id", ""),
+                    "object_id": row.get("object_id", ""),
+                    "object_name": row.get("object_name", ""),
+                    "method": method,
+                    "zed_median_m": zed,
+                    "method_median_m": pred,
+                    "diff_m": diff,
+                    "abs_diff_m": abs_diff,
+                    "rel_abs_diff_to_zed": abs_diff / zed,
+                    "ratio_method_over_zed": pred / zed,
+                    "zed_valid_ratio": row.get("zed_valid_ratio", np.nan),
+                    "method_valid_ratio": row.get(f"{method}_valid_ratio", np.nan),
+                    "gt_distance_m": row.get("gt_distance_m", np.nan),
+                    "notes": row.get("notes", ""),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def build_zed_reference_sample_metrics(scene_dir: Path) -> pd.DataFrame:
+    rows: list[dict] = []
+    for sample_dir in sorted(scene_dir.glob("sample_*")):
+        zed_path = sample_dir / "zed_depth.npy"
+        if not zed_path.exists():
+            continue
+        zed = np.load(zed_path).astype(np.float32)
+        zed_valid = valid_depth_mask(zed)
+        for method, filename in DA3_METHODS.items():
+            depth_path = sample_dir / filename
+            if not depth_path.exists():
+                continue
+            pred = np.load(depth_path).astype(np.float32)
+            pred = resize_depth_to_shape(pred, zed.shape[:2])
+            mask = joint_valid_mask(zed, pred)
+            raw = supervised_depth_metrics(pred, zed, mask)
+            pair = pairwise_depth_metrics(zed, pred, mask)
+            scale = median_scale_to_reference(pred, zed, mask)
+            scaled = supervised_depth_metrics(pred * scale, zed, mask) if np.isfinite(scale) else {}
+            pred_valid = valid_depth_mask(pred)
+            valid_px = int(mask.sum())
+            total_px = int(mask.size)
+            row = {
+                "sample_id": sample_dir.name,
+                "method": method,
+                "valid_px": valid_px,
+                "total_px": total_px,
+                "joint_valid_ratio": valid_px / max(total_px, 1),
+                "zed_valid_ratio": float(zed_valid.mean()),
+                "method_valid_ratio": float(pred_valid.mean()),
+                "zed_median_m": float(np.median(zed[zed_valid])) if zed_valid.any() else np.nan,
+                "method_median_m": float(np.median(pred[pred_valid])) if pred_valid.any() else np.nan,
+                "median_scale_to_zed": scale,
+            }
+            row.update({f"raw_{key}": value for key, value in raw.items()})
+            row.update({f"pair_{key}": value for key, value in pair.items()})
+            row.update({f"scaled_{key}": value for key, value in scaled.items()})
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def write_plots(
+    existing_long: pd.DataFrame,
+    existing_wide: pd.DataFrame,
+    winner_counts: pd.DataFrame,
+    zed_ref_roi: pd.DataFrame,
+    zed_ref_samples: pd.DataFrame,
+    plots_dir: Path,
+) -> None:
     if existing_long.empty:
+        plt.style.use("seaborn-v0_8-whitegrid")
+        write_zed_reference_plots(zed_ref_roi, zed_ref_samples, plots_dir)
         return
 
     plt.style.use("seaborn-v0_8-whitegrid")
@@ -286,6 +395,75 @@ def write_plots(existing_long: pd.DataFrame, existing_wide: pd.DataFrame, winner
         fig.savefig(plots_dir / "winner_counts.png", dpi=160)
         plt.close(fig)
 
+    write_zed_reference_plots(zed_ref_roi, zed_ref_samples, plots_dir)
+
+
+def write_zed_reference_plots(zed_ref_roi: pd.DataFrame, zed_ref_samples: pd.DataFrame, plots_dir: Path) -> None:
+    colors = {"da3_mono": "#ff7f0e", "da3_multiview": "#2ca02c"}
+
+    if not zed_ref_roi.empty:
+        fig, ax = plt.subplots(figsize=(7, 7))
+        max_v = max(float(zed_ref_roi["zed_median_m"].max()), float(zed_ref_roi["method_median_m"].max())) * 1.08
+        ax.plot([0, max_v], [0, max_v], "k--", lw=1, label="DA3 = ZED")
+        for method, group in zed_ref_roi.groupby("method"):
+            ax.scatter(group["zed_median_m"], group["method_median_m"], s=70, label=method, color=colors.get(method))
+            for _, row in group.iterrows():
+                ax.annotate(str(row["object_name"])[:12], (row["zed_median_m"], row["method_median_m"]), fontsize=8, alpha=0.75)
+        ax.set_xlabel("ZED median ROI depth (m)")
+        ax.set_ylabel("DA3 median ROI depth (m)")
+        ax.set_title("ROI depth: DA3 vs ZED reference")
+        ax.set_xlim(0, max_v)
+        ax.set_ylim(0, max_v)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(plots_dir / "zed_ref_roi_scatter.png", dpi=160)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        plot_data = zed_ref_roi.sort_values("abs_diff_m", ascending=False)
+        labels = plot_data["sample_id"].astype(str) + ":" + plot_data["object_name"].astype(str)
+        ax.bar(labels, plot_data["diff_m"], color=["#d62728" if value > 0 else "#1f77b4" for value in plot_data["diff_m"]])
+        ax.axhline(0, color="k", lw=1)
+        ax.set_ylabel("DA3 median - ZED median (m)")
+        ax.set_title("ROI signed difference against ZED")
+        ax.tick_params(axis="x", rotation=45)
+        fig.tight_layout()
+        fig.savefig(plots_dir / "zed_ref_roi_signed_diff.png", dpi=160)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=(8, 5))
+        zed_ref_roi.boxplot(column="abs_diff_m", by="method", ax=ax)
+        ax.set_title("ROI absolute difference against ZED")
+        ax.set_xlabel("method")
+        ax.set_ylabel("|DA3 - ZED| median depth (m)")
+        fig.suptitle("")
+        fig.tight_layout()
+        fig.savefig(plots_dir / "zed_ref_roi_abs_diff_boxplot.png", dpi=160)
+        plt.close(fig)
+
+    if not zed_ref_samples.empty:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        for method, group in zed_ref_samples.groupby("method"):
+            ax.scatter(group["joint_valid_ratio"], group["raw_mae"], s=80, label=method, color=colors.get(method))
+        ax.set_xlabel("Joint valid pixel ratio")
+        ax.set_ylabel("Raw MAE vs ZED (m)")
+        ax.set_title("Per-sample DA3/ZED disagreement")
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(plots_dir / "zed_ref_sample_mae_vs_validity.png", dpi=160)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(figsize=(9, 5))
+        labels = zed_ref_samples["sample_id"].astype(str) + ":" + zed_ref_samples["method"].astype(str)
+        ax.bar(labels, zed_ref_samples["median_scale_to_zed"], color=[colors.get(method, "gray") for method in zed_ref_samples["method"]])
+        ax.axhline(1.0, color="k", lw=1)
+        ax.set_ylabel("Median scale to ZED")
+        ax.set_title("Scale needed to align DA3 median depth to ZED")
+        ax.tick_params(axis="x", rotation=45)
+        fig.tight_layout()
+        fig.savefig(plots_dir / "zed_ref_sample_scale.png", dpi=160)
+        plt.close(fig)
+
 
 def write_visual_overlays(scene_dir: Path, wide: pd.DataFrame, visuals_dir: Path) -> None:
     for sample_dir in sorted(scene_dir.glob("sample_*")):
@@ -315,6 +493,8 @@ def write_report(
     existing_wide: pd.DataFrame,
     summary: pd.DataFrame,
     winner_counts: pd.DataFrame,
+    zed_ref_roi: pd.DataFrame,
+    zed_ref_samples: pd.DataFrame,
 ) -> None:
     plots_dir = analysis_dir / "plots"
     visuals_dir = analysis_dir / "visuals"
@@ -337,6 +517,51 @@ def write_report(
     lines.append("## Winner counts")
     lines.append("")
     lines.append(dataframe_to_markdown(winner_counts) if not winner_counts.empty else "No winner data.")
+    lines.append("")
+    lines.append("## ZED reference summary")
+    lines.append("")
+    if zed_ref_samples.empty:
+        lines.append("No DA3/ZED sample-level comparisons found.")
+    else:
+        sample_cols = [
+            "sample_id",
+            "method",
+            "joint_valid_ratio",
+            "zed_valid_ratio",
+            "method_valid_ratio",
+            "raw_mae",
+            "raw_rmse",
+            "raw_abs_rel",
+            "raw_bias",
+            "median_scale_to_zed",
+            "scaled_mae",
+            "pair_corr",
+            "pair_grad_mae",
+        ]
+        available_sample_cols = [col for col in sample_cols if col in zed_ref_samples.columns]
+        lines.append(dataframe_to_markdown(zed_ref_samples[available_sample_cols], floatfmt=".4f"))
+    lines.append("")
+    lines.append("## ZED reference ROI metrics")
+    lines.append("")
+    if zed_ref_roi.empty:
+        lines.append("No DA3/ZED ROI comparisons found.")
+    else:
+        roi_cols = [
+            "sample_id",
+            "object_name",
+            "method",
+            "zed_median_m",
+            "method_median_m",
+            "diff_m",
+            "abs_diff_m",
+            "rel_abs_diff_to_zed",
+            "ratio_method_over_zed",
+            "zed_valid_ratio",
+            "method_valid_ratio",
+            "notes",
+        ]
+        available_roi_cols = [col for col in roi_cols if col in zed_ref_roi.columns]
+        lines.append(dataframe_to_markdown(zed_ref_roi[available_roi_cols], floatfmt=".4f"))
     lines.append("")
     lines.append("## Per-object recomputed metrics")
     lines.append("")

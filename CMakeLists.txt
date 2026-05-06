@@ -13,6 +13,7 @@ install(PROGRAMS
   zed_da3_compare/da3_depth_multicam_node.py
   zed_da3_compare/da3_offline_bag_eval.py
   zed_da3_compare/da3_stereo_depth_node.py
+  zed_da3_compare/analyze_gt_scene.py
   zed_da3_compare/gt_annotation_tool.py
   zed_da3_compare/interactive_depth_viewer.py
   zed_da3_compare/zed_sync_sampler_node.py

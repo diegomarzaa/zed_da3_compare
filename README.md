@@ -9,6 +9,9 @@ zed_da3_compare/da3_depth_node.py
 zed_da3_compare/da3_depth_multicam_node.py
 zed_da3_compare/da3_offline_bag_eval.py
 zed_da3_compare/da3_stereo_depth_node.py
+zed_da3_compare/analyze_gt_scene.py
+zed_da3_compare/gt_annotation_tool.py
+zed_da3_compare/interactive_depth_viewer.py
 zed_da3_compare/zed_sync_sampler_node.py
 ```
 
@@ -61,6 +64,125 @@ Además se publica un topic auxiliar para inspección visual:
 ```
 
 Ese preview ya va normalizado y coloreado. No es el dato científico, solo una ayuda para los ojos.
+
+## Workflow actual recomendado: DA3 vs ZED
+
+Ahora mismo la ruta más práctica es comparar DA3 contra ZED usando la ZED como referencia métrica aproximada. No es ground truth perfecto, pero permite capturar muchas más escenas y ver patrones reales.
+
+Flujo:
+
+```text
+capturar sample -> guardar RGB/ZED depth/DA3 depth -> analizar DA3-ZED -> inspeccionar visualmente
+```
+
+Herramientas principales:
+
+```text
+gt_annotation_tool.py          captura samples y ROIs
+analyze_gt_scene.py            genera CSV, reporte y plots
+interactive_depth_viewer.py    inspección pixel a pixel con cursor
+```
+
+Nota importante sobre topics ZED:
+
+```text
+/zed/zed_node/rgb/color/rect/image      recomendado para capturar RGB + depth
+/zed/zed_node/depth/depth_registered    depth registrado sobre la imagen izquierda/RGB
+/zed/zed_node/left/color/rect/image     util para stereo con right, pero no es el topic preferido para asociar RGB-depth
+/zed/zed_node/right/color/rect/image    util para DA3 multiview/stereo
+```
+
+La documentacion de Stereolabs indica que `rgb` y `left` son identicos en camaras stereo, pero `rgb` se usa para asociarse con el depth sincronizado. Por eso la GUI usa ahora por defecto:
+
+```text
+left_image_topic:=/zed/zed_node/rgb/color/rect/image
+zed_depth_topic:=/zed/zed_node/depth/depth_registered
+```
+
+El `right_image_topic` se mantiene para guardar la vista derecha si esta disponible y poder procesar multiview.
+
+### Analizar una escena capturada
+
+Ejemplo:
+
+```bash
+ros2 run zed_da3_compare analyze_gt_scene.py \
+  /home/usuario/depth_anything_ws/src/zed_da3_compare/captures/scene_00_tests
+```
+
+También se puede ejecutar directo desde el repo:
+
+```bash
+python3 /home/usuario/depth_anything_ws/src/zed_da3_compare/zed_da3_compare/analyze_gt_scene.py \
+  /home/usuario/depth_anything_ws/src/zed_da3_compare/captures/scene_00_tests
+```
+
+Outputs nuevos centrados en ZED como referencia:
+
+```text
+analysis/zed_reference_roi_metrics.csv
+analysis/zed_reference_sample_metrics.csv
+analysis/plots/zed_ref_roi_scatter.png
+analysis/plots/zed_ref_roi_signed_diff.png
+analysis/plots/zed_ref_roi_abs_diff_boxplot.png
+analysis/plots/zed_ref_sample_mae_vs_validity.png
+analysis/plots/zed_ref_sample_scale.png
+```
+
+`zed_reference_roi_metrics.csv` compara ROIs:
+
+```text
+zed_median_m
+method_median_m
+diff_m                  DA3 - ZED
+abs_diff_m              |DA3 - ZED|
+rel_abs_diff_to_zed
+ratio_method_over_zed
+zed_valid_ratio
+method_valid_ratio
+```
+
+`zed_reference_sample_metrics.csv` compara mapas completos:
+
+```text
+raw_mae                 error medio DA3 contra ZED, sin tocar escala
+raw_rmse
+raw_abs_rel
+raw_bias                positivo si DA3 tiende a dar más distancia que ZED
+median_scale_to_zed     escala que habría que aplicar a DA3 para igualar mediana ZED
+scaled_mae              error tras corregir escala global
+pair_corr               correlación de forma entre mapas
+pair_grad_mae           diferencia de estructura/bordes de profundidad
+joint_valid_ratio       porcentaje de píxeles válidos en ambos mapas
+```
+
+Lectura rápida:
+
+```text
+raw_* bajo              DA3 se parece métricamente a ZED
+scaled_* mucho menor    DA3 conserva forma, pero falla escala global
+raw_bias positivo       DA3 sobreestima distancia respecto a ZED
+ratio > 1 en ROI        DA3 da ese objeto más lejos que ZED
+zed_valid_ratio bajo    cuidado: quizás la referencia ZED no es fiable en esa ROI
+```
+
+Para inspeccionar interactivamente:
+
+```bash
+ros2 run zed_da3_compare interactive_depth_viewer.py \
+  /home/usuario/depth_anything_ws/src/zed_da3_compare/captures/scene_00_tests
+```
+
+### Notebook editable
+
+Para entender y modificar el analisis paso a paso:
+
+```bash
+cd /home/usuario/depth_anything_ws/src/zed_da3_compare
+jupyter lab notebooks/da3_zed_scene_analysis.ipynb
+```
+
+El notebook recalcula las metricas DA3-ZED desde los `.npy`, muestra tablas intermedias y dibuja las graficas dentro de Jupyter.
 
 ## Modelo DA3
 

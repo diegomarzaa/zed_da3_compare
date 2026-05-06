@@ -1,0 +1,1 @@
+scene,sample_id,object_id,object_name,gt_distance_m,x1,y1,x2,y2,zed_median_m,zed_mean_m,da3_mono_median_m,da3_mono_mean_m,da3_multiview_median_m,da3_multiview_mean_m,zed_abs_error_m,da3_mono_abs_error_m,da3_multiview_abs_error_m,winner_abs_error,notes
