@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import cv2
 import numpy as np
 import rclpy
@@ -12,6 +10,7 @@ import torch
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
+from zed_da3_compare.da3_common import load_da3_model, log_depth_stats
 from zed_da3_compare.ros_image_utils import depth_to_image_msg, depth_to_preview_msg, image_msg_to_rgb
 
 
@@ -32,17 +31,8 @@ class Da3DepthNode(Node):
         self.declare_parameter("preview_high_percentile", 99.0)
         self.declare_parameter("preview_use_inverse_depth", True)
 
-        model_dir = Path(str(self.get_parameter("model_dir").value)).expanduser()
-        if not str(model_dir) or not model_dir.is_dir():
-            raise ValueError(
-                "Parameter 'model_dir' must be a local model directory, "
-                "for example: /models/da3/DA3NESTED-GIANT-LARGE-1.1"
-            )
-
-        from depth_anything_3.api import DepthAnything3
-
         self.device = str(self.get_parameter("device").value)
-        self.model = DepthAnything3.from_pretrained(str(model_dir)).to(self.device).eval()
+        self.model = load_da3_model(self)
         self.frame_count = 0
 
         input_topic = str(self.get_parameter("input_image_topic").value)
@@ -53,7 +43,6 @@ class Da3DepthNode(Node):
         self.preview_pub = self.create_publisher(Image, preview_topic, 1)
         self.create_subscription(Image, input_topic, self.on_image, 1)
 
-        self.get_logger().info(f"Loaded DA3 model from: {model_dir}")
         self.get_logger().info(f"Subscribed: {input_topic}")
         self.get_logger().info(f"Publishing:  {output_topic} [sensor_msgs/Image, 32FC1, metres]")
         self.get_logger().info(f"Publishing:  {preview_topic} [sensor_msgs/Image, rgb8, diagnostic preview]")
@@ -98,19 +87,8 @@ class Da3DepthNode(Node):
         # Estadísticas de depuración:
         # esto no modifica la salida, solo nos ayuda a ver si el rango es razonable.
         # Si el modelo está devolviendo valores absurdos, aquí se ve enseguida.
-        valid = np.isfinite(depth_m) & (depth_m > 0.0)
-        if valid.any() and self.frame_count % 30 == 0:
-            v = depth_m[valid]
-            self.get_logger().info(
-                "DA3 depth stats "
-                f"is_metric={getattr(prediction, 'is_metric', None)} "
-                f"scale_factor={getattr(prediction, 'scale_factor', None)} "
-                f"min={np.min(v):.3f} "
-                f"p01={np.percentile(v, 1):.3f} "
-                f"p50={np.percentile(v, 50):.3f} "
-                f"p99={np.percentile(v, 99):.3f} "
-                f"max={np.max(v):.3f}"
-            )
+        if self.frame_count % 30 == 0:
+            log_depth_stats(self.get_logger(), "DA3 mono", prediction, depth_m)
 
         # Si el output del modelo viene a una resolución distinta de la de entrada,
         # lo reescalamos para que el topic bruto tenga el mismo tamaño que la imagen original.

@@ -1,0 +1,16 @@
+{
+  "scene": "scene_00_tests",
+  "source": "live",
+  "left_stamp_ns": 1777993541378834541,
+  "right_stamp_ns": null,
+  "depth_stamp_ns": 1777993541378834541,
+  "left_depth_delta_ms": 0.0,
+  "left_right_delta_ms": NaN,
+  "left_topic": "/zed/zed_node/left/color/rect/image",
+  "right_topic": "/zed/zed_node/right/color/rect/image",
+  "zed_depth_topic": "/zed/zed_node/depth/depth_registered",
+  "sample_id": "sample_000003",
+  "has_da3_mono": true,
+  "has_da3_multiview": false,
+  "annotation_count": 6
+}

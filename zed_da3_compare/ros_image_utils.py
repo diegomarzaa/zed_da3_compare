@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import numpy as np
 import cv2
+import numpy as np
 from sensor_msgs.msg import Image
 
 
@@ -33,24 +33,38 @@ def image_msg_to_rgb(msg: Image) -> np.ndarray:
 
     raise ValueError(f"Unsupported color image encoding: {msg.encoding}")
 
-def depth_to_image_msg(depth_m, src_msg):
-    """Create a 32FC1 ROS Image message from an HxW float32 depth map in metres."""
-    from array import array
-    import numpy as np
-    from sensor_msgs.msg import Image
 
+def depth_msg_to_meters(msg: Image) -> np.ndarray:
+    """Convert a ROS depth Image message to an HxW float32 depth map in metres."""
+    enc = msg.encoding.lower()
+
+    if enc == "32fc1":
+        data = np.frombuffer(msg.data, dtype=np.float32)
+        row_values = msg.step // 4
+        return data.reshape(msg.height, row_values)[:, : msg.width].copy()
+
+    if enc == "16uc1":
+        data = np.frombuffer(msg.data, dtype=np.uint16)
+        row_values = msg.step // 2
+        depth_mm = data.reshape(msg.height, row_values)[:, : msg.width]
+        return (depth_mm.astype(np.float32) * 0.001).copy()
+
+    raise ValueError(f"Unsupported depth image encoding: {msg.encoding}")
+
+
+def depth_to_image_msg(depth_m: np.ndarray, src_msg: Image) -> Image:
+    """Create a 32FC1 ROS Image message from an HxW float32 depth map in metres."""
     depth_m = np.ascontiguousarray(depth_m, dtype=np.float32)
 
     msg = Image()
     msg.header = src_msg.header
-    msg.height = depth_m.shape[0]
-    msg.width = depth_m.shape[1]
+    msg.height, msg.width = depth_m.shape[:2]
     msg.encoding = "32FC1"
-    msg.is_bigendian = 0
-    msg.step = msg.width * 4
-    msg.data = array('B', depth_m.tobytes())
-
+    msg.is_bigendian = False
+    msg.step = int(msg.width * 4)
+    msg.data = depth_m.tobytes()
     return msg
+
 
 def depth_to_preview_msg(
     depth_m: np.ndarray,
